@@ -45,10 +45,11 @@ string getCurrentTime(){
     return timeNow.str();
 }
 
-void joinThreads(){
+void joinAndClearThreads(){
     for(thread &thread : threads){
         thread.join();
     }
+    threads.clear();
 }
 
 bool checkIfPrime(int num){
@@ -110,7 +111,7 @@ int main(){
     cout << "Start time | " << algoStartTime << "\n";
 
     threadByRange1(threadX, numY);
-    joinThreads();
+    joinAndClearThreads();
     
     cout << "Start time | " << algoStartTime << "\n";
     cout << "End time   | " << getCurrentTime() << "\n";
