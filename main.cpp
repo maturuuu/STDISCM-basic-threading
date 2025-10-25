@@ -413,6 +413,7 @@ int main(){
                 cout << "Start time | " << algoStartTime << "\n";
 
                 outputBuffer.resize(numY+1);
+                jobs.resize(threadX);
                 threadByDiv(threadX, numY, "log");
                 algoEndTime = getCurrentTime();
                 timestamp = getTimestamp();
