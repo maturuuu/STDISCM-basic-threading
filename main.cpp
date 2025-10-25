@@ -181,17 +181,6 @@ void getJob(int id){
 
             pendingJobs.fetch_sub(1);
 
-            //debug
-            // {
-            //     lock_guard<mutex> printLock(printMutex);
-            //     cout << "Thread " << id << " decremented pendingJobs" << endl;
-            // }
-            //debug
-
-            //old implementation
-            // jobDoneCV.notify_all();
-            //old implementation
-
             if(pendingJobs.load() == 0){
                 lock_guard<mutex> lock(jobDoneMutex);
                 jobDoneCV.notify_all();
@@ -204,35 +193,38 @@ void makeJobs(int threadCount, int num){
     pendingJobs = 0;
     int maxDivisor = static_cast<int>(sqrt(num));
     int rangeSize = (maxDivisor + threadCount - 1) / threadCount;
+    {
+        lock_guard<mutex> lock(jobReadyMutex);
     
-    for(int i=0; i<threadCount; i++){
-        jobs[i].isReady = false;
-        jobs[i].start = 0;
-        jobs[i].end = 0;
-        jobs[i].num = 0;
-    }
-
-    for(int i=0; i<threadCount; i++){
-        int start = i * rangeSize + 2;
-        int end = min(start + rangeSize, maxDivisor + 1);
-
-        if(start >= end){ // thread has no work, dont activate its job
+        for(int i=0; i<threadCount; i++){
             jobs[i].isReady = false;
+            jobs[i].start = 0;
+            jobs[i].end = 0;
+            jobs[i].num = 0;
         }
 
-        else{
-            jobs[i].start = start;
-            jobs[i].end = end;
-            jobs[i].num = num;
-            jobs[i].isReady = true;
-            pendingJobs++;
+        for(int i=0; i<threadCount; i++){
+            int start = i * rangeSize + 2;
+            int end = min(start + rangeSize, maxDivisor + 1);
+
+            if(start >= end){ // thread has no work, dont activate its job
+                jobs[i].isReady = false;
+            }
+
+            else{
+                jobs[i].start = start;
+                jobs[i].end = end;
+                jobs[i].num = num;
+                jobs[i].isReady = true;
+                pendingJobs++;
+            }
         }
+        
+        jobReadyCV.notify_all();
     }
-    
-    jobReadyCV.notify_all();
 }
 
-void threadByDiv(int threadCount, int maxNum){
+void threadByDiv(int threadCount, int maxNum, string mode="print"){
     vector<thread> threads;
     stopAllThreads = false;
 
@@ -245,8 +237,18 @@ void threadByDiv(int threadCount, int maxNum){
         divisorFoundThreadID = -1;
 
         if(i == 0 || i == 1){
-            string timestamp = getTimestamp();
-            cout << timestamp << " | " << i << " -> NOT PRIME" << "\n";  
+            if(mode == "print"){
+                string timestamp = getTimestamp();
+                cout << timestamp << " | " << i << " -> NOT PRIME" << "\n";  
+            }
+
+            else if(mode == "log"){
+                string timestamp = getTimestamp();
+                ostringstream logString;
+
+                logString << timestamp << " | " << i << " -> NOT PRIME" << "\n";
+                outputBuffer[i] = logString.str();
+            }
         }
 
         else{
@@ -260,14 +262,36 @@ void threadByDiv(int threadCount, int maxNum){
             }
             
             if(divisorFound.load() == -1){
-                string timestamp = getTimestamp();
-                cout << timestamp << " | " << i << " -> PRIME" << "\n";
+                if(mode == "print"){
+                    string timestamp = getTimestamp();
+                    cout << timestamp << " | " << i << " -> PRIME" << "\n";
+                }
+
+                else if(mode == "log"){
+                    string timestamp = getTimestamp();
+                    ostringstream logString;
+
+                    logString << timestamp << " | " << i << " -> PRIME" << "\n";
+                    outputBuffer[i] = logString.str();
+                }
+                
             }
 
             else{
-                string timestamp = getTimestamp();
-                lock_guard<mutex> lock(printMutex);
-                cout << timestamp << " | " << i << " -> NOT PRIME : Thread " << divisorFoundThreadID << " found " << divisorFound<< "\n";
+                if(mode == "print"){
+                    string timestamp = getTimestamp();
+                    lock_guard<mutex> lock(printMutex);
+                    cout << timestamp << " | " << i << " -> NOT PRIME : Thread " << divisorFoundThreadID << " found " << divisorFound<< "\n";
+                }
+
+                else if(mode == "log"){
+                    string timestamp = getTimestamp();
+                    ostringstream logString;
+
+                    logString << timestamp << " | " << i << " -> NOT PRIME: Thread " << divisorFoundThreadID << " found " << divisorFound<< "\n";
+                    outputBuffer[i] = logString.str();
+                }
+                
             }
         }
     }
@@ -373,7 +397,7 @@ int main(){
                 cout << "Start time | " << algoStartTime << "\n";
 
                 jobs.resize(threadX);
-                threadByDiv(threadX, numY);
+                threadByDiv(threadX, numY, "print");
                 algoEndTime = getCurrentTime();
                 
                 cout << "Start time | " << algoStartTime << "\n";
@@ -383,6 +407,22 @@ int main(){
                 break;
 
             case 4:
+                cout << "Checking for primes up to number " << numY << " using " << threadX << " threads." << "\n";
+                startTime = chrono::steady_clock::now();
+                algoStartTime = getCurrentTime();
+                cout << "Start time | " << algoStartTime << "\n";
+
+                outputBuffer.resize(numY+1);
+                threadByDiv(threadX, numY, "log");
+                algoEndTime = getCurrentTime();
+                timestamp = getTimestamp();
+                printBuffer();
+
+                cout << "Start time | " << algoStartTime << "\n";
+                cout << "End time   | " << algoEndTime << "\n";
+                cout << "Total time elapsed (not including log printing) -> " << timestamp << "\n";
+
+                outputBuffer.clear();
 
                 break;
 
