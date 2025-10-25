@@ -10,6 +10,9 @@
 #include <condition_variable>
 
 using namespace std;
+mutex printMutex;
+mutex cvMtx;
+condition_variable cv;
 
 struct Job{
     int start;
@@ -18,21 +21,11 @@ struct Job{
     bool isReady;
 };
 
-mutex printMutex;
-mutex jobDoneMutex;
-mutex jobReadyMutex;
-
-condition_variable jobDoneCV;
-condition_variable jobReadyCV;
-
 vector<string> outputBuffer; //output buffer for printing afterwards
-chrono::steady_clock::time_point startTime; //holds the start time, updated per run
-
-vector<Job> jobs;
+vector<Job> jobs; //vector holding jobs
+atomic<int> divisorFound = 0;
 atomic<bool> stopAllThreads = false; //flag to stop all threads
-atomic<int> divisorFoundThreadID = -1; //holds the thread id that found the divisor, -1 if none
-atomic<int> divisorFound = -1; //holds the found divisor, -1 if none
-atomic<int> pendingJobs = 0; //holds the number of jobs still running
+chrono::steady_clock::time_point startTime; //holds the start time, updated per run
 
 string getTimestamp(){ //time from startTime
     auto now = chrono::steady_clock::now();
@@ -152,59 +145,10 @@ void threadByRange(int threadCount, int maxNum, string mode = "print"){
 
 //--------------------------------------------------------------------
 
-bool checkIfDivisible(int divNum, int targetNum){
-    if(targetNum % divNum == 0){
-        return true;
-    }
-    else return false;
-}
-
-void getJob(int id){
-    while(true){
-        unique_lock<mutex> lock(jobReadyMutex);
-        jobReadyCV.wait(lock, [id]() { return stopAllThreads.load() || jobs[id].isReady; }); //wait for makeJobs to finish
-        lock.unlock();
-
-        if(stopAllThreads.load()) break;
-
-        if(jobs[id].isReady){
-            jobs[id].isReady = false;
-            Job job = jobs[id];
-            
-            for(int i=job.start; i<job.end && divisorFound.load() == -1; i++){
-                if(checkIfDivisible(i, job.num)){
-                    divisorFound.store(i);
-                    divisorFoundThreadID.store(id);
-                    break;
-                }
-            }
-
-            pendingJobs.fetch_sub(1);
-
-            //debug
-            // {
-            //     lock_guard<mutex> printLock(printMutex);
-            //     cout << "Thread " << id << " decremented pendingJobs" << endl;
-            // }
-            //debug
-
-            //old implementation
-            // jobDoneCV.notify_all();
-            //old implementation
-
-            if(pendingJobs.load() == 0){
-                lock_guard<mutex> lock(jobDoneMutex);
-                jobDoneCV.notify_all();
-            }
-        }
-    }
-}
-
 void makeJobs(int threadCount, int num){
-    pendingJobs = 0;
     int maxDivisor = static_cast<int>(sqrt(num));
     int rangeSize = (maxDivisor + threadCount - 1) / threadCount;
-    
+
     for(int i=0; i<threadCount; i++){
         jobs[i].isReady = false;
         jobs[i].start = 0;
@@ -225,15 +169,49 @@ void makeJobs(int threadCount, int num){
             jobs[i].end = end;
             jobs[i].num = num;
             jobs[i].isReady = true;
-            pendingJobs++;
         }
     }
-    
-    jobReadyCV.notify_all();
 }
 
-void threadByDiv(int threadCount, int maxNum){
+bool checkIfDivisible(int divNum, int targetNum){
+    if(targetNum % divNum == 0){
+        return true;
+    }
+    else return false;
+}
+
+void getJob(int id){
+    while(!stopAllThreads){
+        if(jobs[id].isReady){
+            Job thisJob = jobs[id];
+
+            for(int i=thisJob.start; i<thisJob.end; i++){
+                if (divisorFound > 0) break;
+
+                if(checkIfDivisible(i, thisJob.num) == true){
+                    int divisorExpected = 0;
+                    if(divisorFound.compare_exchange_strong(divisorExpected, i)){ //first thread to change divisorFound from 0 wins
+                        string timestamp = getTimestamp();
+                        lock_guard<mutex> lock(printMutex);
+                        cout << timestamp << " | " << thisJob.num << " -> NOT PRIME : Thread " << id << " found " << i << "\n";
+                    }
+
+                    break;
+                }
+            }
+            jobs[id].isReady = false;
+            {
+                lock_guard<mutex> lk(cvMtx);
+                cv.notify_one();
+            }
+        }
+    }
+}
+
+//Task division scheme: threads are for divisibility testing - DONE!!
+void threadByDiv(int threadCount, int maxNum){ //add mode later
     vector<thread> threads;
+    // int start, end;
     stopAllThreads = false;
 
     for(int t=0; t<threadCount; t++){
@@ -241,47 +219,35 @@ void threadByDiv(int threadCount, int maxNum){
     }
 
     for(int i=0; i<=maxNum; i++){
-        divisorFound = -1;
-        divisorFoundThreadID = -1;
-
         if(i == 0 || i == 1){
             string timestamp = getTimestamp();
             cout << timestamp << " | " << i << " -> NOT PRIME" << "\n";  
         }
 
         else{
+            divisorFound = 0;
             makeJobs(threadCount, i);
 
-            {   
-                unique_lock<mutex> lock(jobDoneMutex);
-                // cout << "Waiting..." << "\n";
-                jobDoneCV.wait(lock, []() -> bool { return pendingJobs.load() <= 0; }); //trying <=, is usually ==
-                // cout << "Woke up!" << "\n";
-            }
-            
-            if(divisorFound.load() == -1){
+
+            unique_lock<mutex> lk(cvMtx);
+            cv.wait(lk, [&] {
+                if(divisorFound > 0) return true; //thread has printed not prime, move on
+                for(int t=0; t<threadCount; t++){ //checks if all jobs are done for this num
+                    if(jobs[t].isReady) return false; 
+                }
+                return true; //num is prime, move on
+            });
+
+            if (divisorFound == 0){
                 string timestamp = getTimestamp();
                 cout << timestamp << " | " << i << " -> PRIME" << "\n";
             }
-
-            else{
-                string timestamp = getTimestamp();
-                lock_guard<mutex> lock(printMutex);
-                cout << timestamp << " | " << i << " -> NOT PRIME : Thread " << divisorFoundThreadID << " found " << divisorFound<< "\n";
-            }
         }
     }
-
     stopAllThreads = true;
-    {
-    lock_guard<mutex> lock(jobReadyMutex);
-    jobReadyCV.notify_all();
-    }
     joinThreads(threads);
     threads.clear();
 }
-
-//--------------------------------------------------------------------
 
 int main(){
     string algoStartTime, algoEndTime, timestamp;
@@ -393,3 +359,4 @@ int main(){
     }
 }
 
+//ISSUE: for case 3 sometimes nonprimes become prime

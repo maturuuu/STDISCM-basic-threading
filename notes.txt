@@ -1,0 +1,34 @@
+CASE 3 --------------------------------
+
+DAMN YOU RACE CONDITIONS!!!!
+
+- Have a global atomic tracker of whether a divisor was found or not
+- Have a global atomic tracker of how many jobs are done
+    - +1 when setting a job as ready
+    - -1 when finishing a job
+- job completion protocol
+    - if a job found no divisor = subtract from job count, set to not ready, chill
+    - if no divisor found in any job and all jobs done = prime!
+    - if a job found a divisor = stop other jobs (they will set themselves to not ready), not prime!
+- main loop will first check if all jobs are done before checking if a divisor was found
+    - can use conditional variable in the main thread
+    - when a job subtracts from job count, it will notify_one the main thread
+    - the main thread will check the number of jobs left and proceed if its 0
+
+THREAD BY DIV 
+1. make the vector of threads
+2. start the getJob work on all threads
+3. for each number:
+    3.1. make jobs for that number [makeJobs | 1]
+    3.2. wait for all jobs to finish (pendingJobs == 0)
+4. 
+
+MAKEJOBS | 1
+1. calculate the max divisor and the range of numbers each job will encompass
+2. set all jobs to the default state
+3. for each job:
+    3.1. get the start and end numbers of the job based on the range
+    3.2. populate each job
+        3.2.1 if the job is valid (start number is less than the max divisor), set that job's fields and isReady = true
+        3.2.2 if the job is invalid, keep that job's isReady = false
+    
